@@ -32,7 +32,8 @@ skyapi listens by default on port 8053. It exposes a single websocket endpoint,
 `/provide`. This endpoint accepts the following GET parameters:
 
 * **service** (Required) - The name of the service being provided
-* **host** (Required) - The host/ip the process can be reached on
+* **host** - The host/ip the process can be reached on. Defaults to the ip the
+  request is coming from
 * **ip** (Required) - The port the process can be reached on
 * **priority** - The priority the process should be given in its pool. Default 1.
 * **weight** - The weight the process should be given in its pool. Default 100.

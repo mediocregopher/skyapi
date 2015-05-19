@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -12,21 +13,29 @@ import (
 
 // Provide makes a connection to the skyapi instance at the given address and
 // informs it that this process is providing for the given service, and that it
-// should use the given host/port/priority/weight information for the DNS
+// should use the given address/priority/weight information for the DNS
 // entry. It will ping the server at the given interval to make sure the
 // connection is still active
 func Provide(
-	addr, service, host string, port, priority, weight int,
+	addr, service, thisAddr string, priority, weight int,
 	interval time.Duration,
 ) error {
+
+	parts := strings.Split(thisAddr, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid addr %q", thisAddr)
+	}
+
 	u, err := url.Parse("ws://" + addr + "/provide")
 	if err != nil {
 		return err
 	}
 	vals := url.Values{}
 	vals.Set("service", service)
-	vals.Set("host", host)
-	vals.Set("port", strconv.Itoa(port))
+	if parts[0] != "" {
+		vals.Set("host", parts[0])
+	}
+	vals.Set("port", parts[1])
 	vals.Set("priority", strconv.Itoa(priority))
 	vals.Set("weight", strconv.Itoa(weight))
 	u.RawQuery = vals.Encode()

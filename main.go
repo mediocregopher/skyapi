@@ -173,9 +173,13 @@ func parseConnData(r *http.Request) (connData, error) {
 	service := r.FormValue("service")
 	host := r.FormValue("host")
 	portStr := r.FormValue("port")
-	if service == "" || host == "" || portStr == "" {
-		err := fmt.Errorf("service, host, and port are all required parameters")
+	if service == "" || portStr == "" {
+		err := fmt.Errorf("service and port are required parameters")
 		return connData{}, err
+	}
+
+	if host == "" {
+		host = r.RemoteAddr[:strings.Index(r.RemoteAddr, ":")]
 	}
 
 	port, err := strconv.Atoi(portStr)
