@@ -15,12 +15,13 @@ import (
 // informs it that this process is providing for the given service, and that it
 // should use the given address/priority/weight information for the DNS
 // entry. It will ping the server at the given interval to make sure the
-// connection is still active
+// connection is still active. If the server disconnects Provide will attempt to
+// reconnect before returning an error, unless reconnectAttempts is 0. If
+// reconnectAttemps is -1 Provide will attempt to reconnect forever.
 func Provide(
-	addr, service, thisAddr string, priority, weight int,
+	addr, service, thisAddr string, priority, weight, reconnectAttempts int,
 	interval time.Duration,
 ) error {
-
 	parts := strings.Split(thisAddr, ":")
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid addr %q", thisAddr)
@@ -40,32 +41,69 @@ func Provide(
 	vals.Set("weight", strconv.Itoa(weight))
 	u.RawQuery = vals.Encode()
 
+	tries := 0
+	for {
+		tries++
+
+		didSucceed, err := innerProvide(addr, u, interval)
+		if didSucceed {
+			tries = 0
+		}
+		if reconnectAttempts >= 0 && tries >= reconnectAttempts {
+			return err
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func innerProvide(
+	addr string, u *url.URL,
+	interval time.Duration,
+) (
+	bool, error,
+) {
+	var didSucceed bool
+
 	rawConn, err := net.Dial("tcp", addr)
 	if err != nil {
-		return err
+		return didSucceed, err
 	}
 	defer rawConn.Close()
 
 	conn, _, err := websocket.NewClient(rawConn, u, nil, 0, 0)
 	if err != nil {
-		return err
+		return didSucceed, err
 	}
 
 	closeCh := make(chan struct{})
 	go readDiscard(conn, closeCh)
 	tick := time.Tick(interval)
+
+	if err := doTick(conn, addr, interval); err != nil {
+		return didSucceed, fmt.Errorf("connection to %s closed: %s", addr, err)
+	}
+	didSucceed = true
+
 	for {
 		select {
 		case <-tick:
-			deadline := time.Now().Add(interval / 2)
-			err := conn.WriteControl(websocket.PingMessage, nil, deadline)
-			if err != nil {
-				return fmt.Errorf("connection to %s closed: %s", addr, err)
+			if err := doTick(conn, addr, interval); err != nil {
+				return didSucceed, fmt.Errorf("connection to %s closed: %s", addr, err)
 			}
+
 		case <-closeCh:
-			return fmt.Errorf("connection to %s closed", addr)
+			return didSucceed, fmt.Errorf("connection to %s closed", addr)
 		}
 	}
+}
+
+func doTick(conn *websocket.Conn, addr string, interval time.Duration) error {
+	deadline := time.Now().Add(interval / 2)
+	err := conn.WriteControl(websocket.PingMessage, nil, deadline)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func readDiscard(conn *websocket.Conn, closeCh chan struct{}) {
