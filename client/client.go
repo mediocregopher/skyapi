@@ -23,7 +23,9 @@ func Provide(
 	interval time.Duration,
 ) error {
 	parts := strings.Split(thisAddr, ":")
-	if len(parts) != 2 {
+	if len(parts) == 1 {
+		parts = append(parts, "")
+	} else if len(parts) != 2 {
 		return fmt.Errorf("invalid addr %q", thisAddr)
 	}
 
@@ -36,7 +38,9 @@ func Provide(
 	if parts[0] != "" {
 		vals.Set("host", parts[0])
 	}
-	vals.Set("port", parts[1])
+	if parts[1] != "" {
+		vals.Set("port", parts[1])
+	}
 	vals.Set("priority", strconv.Itoa(priority))
 	vals.Set("weight", strconv.Itoa(weight))
 	u.RawQuery = vals.Encode()

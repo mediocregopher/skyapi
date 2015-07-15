@@ -92,13 +92,17 @@ var upgrader = websocket.Upgrader{
 }
 
 type connData struct {
-	id, service, host      string
-	port, priority, weight int
+	id       string
+	service  string
+	Host     string `json:"host"`
+	Port     int    `json:"port,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+	Weight   int    `json:"weight,omitempty"`
 }
 
 func (cd connData) sprintf(s string, args ...interface{}) string {
 	realArgs := make([]interface{}, 0, len(args)+4)
-	realArgs = append(realArgs, cd.id, cd.service, cd.host, cd.port)
+	realArgs = append(realArgs, cd.id, cd.service, cd.Host, cd.Port)
 	realArgs = append(realArgs, args...)
 	return fmt.Sprintf("[%s - %s] %s:%d - "+s, realArgs...)
 }
@@ -173,8 +177,11 @@ func parseConnData(r *http.Request) (connData, error) {
 	service := r.FormValue("service")
 	host := r.FormValue("host")
 	portStr := r.FormValue("port")
-	if service == "" || portStr == "" {
-		err := fmt.Errorf("service and port are required parameters")
+	var port int
+	var err error
+
+	if service == "" {
+		err = fmt.Errorf("service and port are required parameters")
 		return connData{}, err
 	}
 
@@ -182,25 +189,23 @@ func parseConnData(r *http.Request) (connData, error) {
 		host = r.RemoteAddr[:strings.Index(r.RemoteAddr, ":")]
 	}
 
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return connData{}, err
+	if portStr != "" {
+		port, err = strconv.Atoi(portStr)
+		if err != nil {
+			return connData{}, err
+		}
 	}
 
 	var priority int
 	priorityStr, weightStr := r.FormValue("priority"), r.FormValue("weight")
-	if priorityStr == "" {
-		priority = 1
-	} else {
+	if priorityStr != "" {
 		if priority, err = strconv.Atoi(priorityStr); err != nil {
 			return connData{}, err
 		}
 	}
 
 	var weight int
-	if weightStr == "" {
-		weight = 100
-	} else {
+	if weightStr != "" {
 		if weight, err = strconv.Atoi(weightStr); err != nil {
 			return connData{}, err
 		}
@@ -209,10 +214,10 @@ func parseConnData(r *http.Request) (connData, error) {
 	return connData{
 		id:       randID(),
 		service:  service,
-		host:     host,
-		port:     port,
-		priority: priority,
-		weight:   weight,
+		Host:     host,
+		Port:     port,
+		Priority: priority,
+		Weight:   weight,
 	}, nil
 }
 
@@ -246,12 +251,7 @@ func etcdStore(cd connData) error {
 	}
 
 	file := path.Join(dir, cd.id)
-	j, err := json.Marshal(map[string]interface{}{
-		"host":     cd.host,
-		"port":     cd.port,
-		"priority": cd.priority,
-		"weight":   cd.weight,
-	})
+	j, err := json.Marshal(cd)
 	if err != nil {
 		return err
 	}
