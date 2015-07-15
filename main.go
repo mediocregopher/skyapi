@@ -130,6 +130,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer log.Print(cd.sprintf("closed"))
+	defer etcdDelete(cd)
 	log.Print(cd.sprintf("connected"))
 
 	tick := time.Tick(timeout / 2)
@@ -244,13 +245,17 @@ func MkDirP(ec *etcd.Client, dir string) error {
 	return nil
 }
 
-func etcdStore(cd connData) error {
+func pathFromConnData(cd connData) (string, string) {
 	dir := path.Join(dnsRoot, cd.service)
+	return dir, path.Join(dir, cd.id)
+}
+
+func etcdStore(cd connData) error {
+	dir, file := pathFromConnData(cd)
 	if err := MkDirP(etcdClient, dir); err != nil {
 		return err
 	}
 
-	file := path.Join(dir, cd.id)
 	j, err := json.Marshal(cd)
 	if err != nil {
 		return err
@@ -262,4 +267,10 @@ func etcdStore(cd connData) error {
 	}
 
 	return nil
+}
+
+func etcdDelete(cd connData) error {
+	_, file := pathFromConnData(cd)
+	_, err := etcdClient.Delete(file, false)
+	return err
 }
