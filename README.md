@@ -18,7 +18,7 @@ it. For the rest of the examples we're going to say the root domain is
 
 skyapi adds service entries to the `services` sub-domain. For example, if a
 process creates a connection saying it provides the `foo` service then it will
-be added to the pool under `foo.services.turtle.com`.
+be added to the pool under `foo.services.turtles.com`.
 
 ## Build
 
