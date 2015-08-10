@@ -86,7 +86,6 @@ func innerProvide(
 	if err := doTick(conn, addr, interval); err != nil {
 		return didSucceed, fmt.Errorf("connection to %s closed: %s", addr, err)
 	}
-	didSucceed = true
 
 	for {
 		select {
@@ -94,6 +93,7 @@ func innerProvide(
 			if err := doTick(conn, addr, interval); err != nil {
 				return didSucceed, fmt.Errorf("connection to %s closed: %s", addr, err)
 			}
+			didSucceed = true
 
 		case <-closeCh:
 			return didSucceed, fmt.Errorf("connection to %s closed", addr)
