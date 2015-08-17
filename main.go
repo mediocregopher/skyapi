@@ -18,11 +18,12 @@ import (
 )
 
 var (
-	listenAddr string
-	etcdAPIs   []string
-	dnsRoot    string
-	timeout    time.Duration
-	etcdClient *etcd.Client
+	listenAddr      string
+	etcdAPIs        []string
+	dnsRoot         string
+	defaultCategory string
+	timeout         time.Duration
+	etcdClient      *etcd.Client
 )
 
 func main() {
@@ -47,30 +48,25 @@ func main() {
 		Description: "The TTL for entries in SkyDNS, in seconds. The server will ping at half this value, the client should also",
 		Default:     "30",
 	})
+	l.Add(lever.Param{
+		Name:        "--default-category",
+		Description: "The default category to file incoming connections over, if they don't specify",
+		Default:     "services",
+	})
 	l.Parse()
 
 	listenAddr, _ = l.ParamStr("--listen-addr")
 	etcdAPIs, _ = l.ParamStrs("--etcd-api")
 	dnsRoot, _ = l.ParamStr("--dns-root")
-	dnsRoot = dnsRootToPath(dnsRoot)
 	timeoutSecs, _ := l.ParamInt("--timeout")
 	timeout = time.Duration(timeoutSecs) * time.Second
+	defaultCategory, _ = l.ParamStr("--default-category")
 
 	etcdClient = etcd.NewClient(etcdAPIs)
 
 	http.Handle("/provide", http.HandlerFunc(handler))
 	log.Printf("listening on %s", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, nil))
-}
-
-func dnsRootToPath(root string) string {
-	parts := strings.Split(root, ".")
-	partsR := append(make([]string, 0, len(parts)+2), "/skydns")
-	for i := len(parts) - 1; i >= 0; i-- {
-		partsR = append(partsR, parts[i])
-	}
-	partsR = append(partsR, "services")
-	return path.Join(partsR...)
 }
 
 func randID() string {
@@ -92,19 +88,31 @@ var upgrader = websocket.Upgrader{
 }
 
 type connData struct {
-	id       string
-	service  string
-	Host     string `json:"host"`
-	Port     int    `json:"port,omitempty"`
-	Priority int    `json:"priority,omitempty"`
-	Weight   int    `json:"weight,omitempty"`
+	id                string
+	service, category string
+	Host              string `json:"host"`
+	Port              int    `json:"port,omitempty"`
+	Priority          int    `json:"priority,omitempty"`
+	Weight            int    `json:"weight,omitempty"`
 }
 
 func (cd connData) sprintf(s string, args ...interface{}) string {
-	realArgs := make([]interface{}, 0, len(args)+4)
-	realArgs = append(realArgs, cd.id, cd.service, cd.Host, cd.Port)
+	realArgs := make([]interface{}, 0, len(args)+5)
+	realArgs = append(realArgs, cd.id, cd.service, cd.category, cd.Host, cd.Port)
 	realArgs = append(realArgs, args...)
-	return fmt.Sprintf("[%s - %s] %s:%d - "+s, realArgs...)
+	return fmt.Sprintf("[%s - %s.%s] %s:%d - "+s, realArgs...)
+}
+
+func (cd connData) toPath() (string, string) {
+	parts := strings.Split(dnsRoot, ".")
+	partsR := append(make([]string, 0, len(parts)+2), "/skydns")
+	for i := len(parts) - 1; i >= 0; i-- {
+		partsR = append(partsR, parts[i])
+	}
+	partsR = append(partsR, cd.category, cd.service)
+	dir := path.Join(partsR...)
+	file := path.Join(dir, cd.id)
+	return dir, file
 }
 
 func errorMessagef(conn *websocket.Conn, s string, args ...interface{}) {
@@ -176,6 +184,7 @@ func readDiscard(conn *websocket.Conn, closeCh chan struct{}) {
 
 func parseConnData(r *http.Request) (connData, error) {
 	service := r.FormValue("service")
+	category := r.FormValue("category")
 	host := r.FormValue("host")
 	portStr := r.FormValue("port")
 	var port int
@@ -184,6 +193,10 @@ func parseConnData(r *http.Request) (connData, error) {
 	if service == "" {
 		err = fmt.Errorf("service and port are required parameters")
 		return connData{}, err
+	}
+
+	if category == "" {
+		category = defaultCategory
 	}
 
 	if host == "" {
@@ -215,6 +228,7 @@ func parseConnData(r *http.Request) (connData, error) {
 	return connData{
 		id:       randID(),
 		service:  service,
+		category: category,
 		Host:     host,
 		Port:     port,
 		Priority: priority,
@@ -245,13 +259,8 @@ func MkDirP(ec *etcd.Client, dir string) error {
 	return nil
 }
 
-func pathFromConnData(cd connData) (string, string) {
-	dir := path.Join(dnsRoot, cd.service)
-	return dir, path.Join(dir, cd.id)
-}
-
 func etcdStore(cd connData) error {
-	dir, file := pathFromConnData(cd)
+	dir, file := cd.toPath()
 	if err := MkDirP(etcdClient, dir); err != nil {
 		return err
 	}
@@ -270,7 +279,7 @@ func etcdStore(cd connData) error {
 }
 
 func etcdDelete(cd connData) error {
-	_, file := pathFromConnData(cd)
+	_, file := cd.toPath()
 	_, err := etcdClient.Delete(file, false)
 	return err
 }
