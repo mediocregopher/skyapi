@@ -16,9 +16,12 @@ this domain. The root domain is configurable, but skyapi must also know about
 it. For the rest of the examples we're going to say the root domain is
 `turtles.com`.
 
-skyapi adds service entries to the `services` sub-domain. For example, if a
-process creates a connection saying it provides the `foo` service then it will
-be added to the pool under `foo.services.turtles.com`.
+skyapi categorizes entries under a sub-domain. By default this sub-domain is
+`services` but this can be configured both globally and on a per-connection
+basis.
+
+For example, if a process creates a connection saying it provides the `foo`
+service then it will be added to the pool under `foo.services.turtles.com`.
 
 ## Build
 
@@ -32,6 +35,8 @@ skyapi listens by default on port 8053. It exposes a single websocket endpoint,
 `/provide`. This endpoint accepts the following GET parameters:
 
 * **service** (Required) - The name of the service being provided
+* **category** - The category (sub-domain) for the service to be filed under.
+  Defaults to `services`
 * **host** - The host/ip the process can be reached on. Defaults to the ip the
   request is coming from
 * **port** (Required) - The port the process can be reached on

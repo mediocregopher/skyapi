@@ -11,49 +11,113 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Provide makes a connection to the skyapi instance at the given address and
-// informs it that this process is providing for the given service, and that it
-// should use the given address/priority/weight information for the DNS
-// entry. It will ping the server at the given interval to make sure the
-// connection is still active. If the server disconnects Provide will attempt to
-// reconnect before returning an error, unless reconnectAttempts is 0. If
-// reconnectAttemps is -1 Provide will attempt to reconnect forever.
+// Opts represent a set of options which can be passed into ProvideOpts. Some
+// are required to be filled in and are marked as such. The rest have defaults
+// listed in their descriptions
+type Opts struct {
+
+	// Required. The address of the skyapi instance to connect to. Should be
+	// "host:port"
+	SkyAPIAddr string
+
+	// Required. The name of the service this process is providing for
+	Service string
+
+	// Required. The address to advertise this process at. Can be either
+	// "host:port" or ":port"
+	ThisAddr string
+
+	// Optional. The category this service falls under. Defaults to the skyapi
+	// server's global default, usually "services"
+	Category string
+
+	// Optional. The priority and weight values which will be stored along with
+	// this entry, and which will be returned in SRV requests to the skyapi
+	// server. Defaults to 1 and 100, respectively
+	Priority, Weight int
+
+	// Optional. Setting to a positive number will cause the connection to
+	// attempt to be remade up to that number of times on a disconnect. After
+	// that many failed attempts an error is returned. If 0 an error is returned
+	// on the first disconnect. If set to a negative number reconnect attempts
+	// will continue forever
+	ReconnectAttempts int
+
+	// Optional. The interval to ping the server at in order to ensure the
+	// connection is still alive. Defaults to 10 seconds.
+	Interval time.Duration
+}
+
+// Provide is a DEPRECATED method for making a connection to a skyapi instance.
+// Use ProvideOpts instead
 func Provide(
 	addr, service, thisAddr string, priority, weight, reconnectAttempts int,
 	interval time.Duration,
 ) error {
-	parts := strings.Split(thisAddr, ":")
+	o := Opts{
+		SkyAPIAddr:        addr,
+		Service:           service,
+		ThisAddr:          thisAddr,
+		Priority:          priority,
+		Weight:            weight,
+		ReconnectAttempts: reconnectAttempts,
+		Interval:          interval,
+	}
+	return provide(o)
+}
+
+// ProvideOpts uses the given Opts value to connect to a skyapi instance and
+// declare a service being provided for. It blocks until disconnect or some
+// other error.
+func ProvideOpts(o Opts) error {
+	if o.Priority == 0 {
+		o.Priority = 1
+	}
+	if o.Weight == 0 {
+		o.Weight = 100
+	}
+	if o.Interval == 0 {
+		o.Interval = 10 * time.Second
+	}
+	return provide(o)
+}
+
+func provide(o Opts) error {
+	parts := strings.Split(o.ThisAddr, ":")
 	if len(parts) == 1 {
 		parts = append(parts, "")
 	} else if len(parts) != 2 {
-		return fmt.Errorf("invalid addr %q", thisAddr)
+		return fmt.Errorf("invalid addr %q", o.ThisAddr)
 	}
 
-	u, err := url.Parse("ws://" + addr + "/provide")
+	u, err := url.Parse("ws://" + o.SkyAPIAddr + "/provide")
 	if err != nil {
 		return err
 	}
 	vals := url.Values{}
-	vals.Set("service", service)
+	vals.Set("service", o.Service)
 	if parts[0] != "" {
 		vals.Set("host", parts[0])
 	}
 	if parts[1] != "" {
 		vals.Set("port", parts[1])
 	}
-	vals.Set("priority", strconv.Itoa(priority))
-	vals.Set("weight", strconv.Itoa(weight))
+	if o.Category != "" {
+		vals.Set("category", o.Category)
+	}
+	vals.Set("priority", strconv.Itoa(o.Priority))
+	vals.Set("weight", strconv.Itoa(o.Weight))
 	u.RawQuery = vals.Encode()
 
 	tries := 0
 	for {
 		tries++
 
-		didSucceed, err := innerProvide(addr, u, interval)
+		didSucceed, err := innerProvide(o.SkyAPIAddr, u, o.Interval)
 		if didSucceed {
 			tries = 0
 		}
-		if reconnectAttempts >= 0 && tries >= reconnectAttempts {
+		if o.ReconnectAttempts >= 0 && tries >= o.ReconnectAttempts {
 			return err
 		}
 		time.Sleep(1 * time.Second)
