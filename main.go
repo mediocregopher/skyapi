@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/rand"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -67,15 +67,6 @@ func main() {
 	http.Handle("/provide", http.HandlerFunc(handler))
 	log.Printf("listening on %s", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, nil))
-}
-
-func randID() string {
-	b := make([]byte, 10)
-	_, err := rand.Read(b)
-	if err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(b)
 }
 
 var upgrader = websocket.Upgrader{
@@ -225,8 +216,15 @@ func parseConnData(r *http.Request) (connData, error) {
 		}
 	}
 
+	sha := sha1.New()
+	fmt.Fprint(sha, service)
+	fmt.Fprint(sha, category)
+	fmt.Fprint(sha, host)
+	fmt.Fprint(sha, port)
+	id := hex.EncodeToString(sha.Sum(nil))
+
 	return connData{
-		id:       randID(),
+		id:       id,
 		service:  service,
 		category: category,
 		Host:     host,
