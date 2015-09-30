@@ -10,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-etcd/etcd"
@@ -24,6 +25,7 @@ var (
 	defaultCategory string
 	timeout         time.Duration
 	etcdClient      *etcd.Client
+	etcdClientLock  sync.Mutex
 )
 
 func main() {
@@ -62,7 +64,9 @@ func main() {
 	timeout = time.Duration(timeoutSecs) * time.Second
 	defaultCategory, _ = l.ParamStr("--default-category")
 
+	etcdClientLock.Lock()
 	etcdClient = etcd.NewClient(etcdAPIs)
+	etcdClientLock.Unlock()
 
 	http.Handle("/provide", http.HandlerFunc(handler))
 	log.Printf("listening on %s", listenAddr)
@@ -258,6 +262,9 @@ func MkDirP(ec *etcd.Client, dir string) error {
 }
 
 func etcdStore(cd connData) error {
+	etcdClientLock.Lock()
+	defer etcdClientLock.Unlock()
+
 	dir, file := cd.toPath()
 	if err := MkDirP(etcdClient, dir); err != nil {
 		return err
@@ -278,6 +285,10 @@ func etcdStore(cd connData) error {
 
 func etcdDelete(cd connData) error {
 	_, file := cd.toPath()
+
+	etcdClientLock.Lock()
 	_, err := etcdClient.Delete(file, false)
+	etcdClientLock.Unlock()
+
 	return err
 }
