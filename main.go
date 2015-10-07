@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"net"
 	"net/http"
 	"path"
 	"strconv"
@@ -15,6 +15,8 @@ import (
 
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/gorilla/websocket"
+	"github.com/levenlabs/go-llog"
+	"github.com/levenlabs/golib/rpcutil"
 	"github.com/mediocregopher/lever"
 )
 
@@ -55,6 +57,11 @@ func main() {
 		Description: "The default category to file incoming connections over, if they don't specify",
 		Default:     "services",
 	})
+	l.Add(lever.Param{
+		Name:        "--log-level",
+		Description: "Adjust the log level. Valid options are: error, warn, info, debug",
+		Default:     "info",
+	})
 	l.Parse()
 
 	listenAddr, _ = l.ParamStr("--listen-addr")
@@ -63,14 +70,20 @@ func main() {
 	timeoutSecs, _ := l.ParamInt("--timeout")
 	timeout = time.Duration(timeoutSecs) * time.Second
 	defaultCategory, _ = l.ParamStr("--default-category")
+	logLevel, _ := l.ParamStr("--log-level")
+
+	llog.SetLevelFromString(logLevel)
 
 	etcdClientLock.Lock()
 	etcdClient = etcd.NewClient(etcdAPIs)
 	etcdClientLock.Unlock()
 
 	http.Handle("/provide", http.HandlerFunc(handler))
-	log.Printf("listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, nil))
+
+	kv := llog.KV{"addr": listenAddr}
+	llog.Info("listening for websocket connections", kv)
+	kv["err"] = http.ListenAndServe(listenAddr, nil)
+	llog.Fatal("failed listening for websocket connections", kv)
 }
 
 var upgrader = websocket.Upgrader{
@@ -91,13 +104,6 @@ type connData struct {
 	Weight            int    `json:"weight,omitempty"`
 }
 
-func (cd connData) sprintf(s string, args ...interface{}) string {
-	realArgs := make([]interface{}, 0, len(args)+5)
-	realArgs = append(realArgs, cd.id, cd.service, cd.category, cd.Host, cd.Port)
-	realArgs = append(realArgs, args...)
-	return fmt.Sprintf("[%s - %s.%s] %s:%d - "+s, realArgs...)
-}
-
 func (cd connData) toPath() (string, string) {
 	parts := strings.Split(dnsRoot, ".")
 	partsR := append(make([]string, 0, len(parts)+2), "/skydns")
@@ -116,9 +122,11 @@ func errorMessagef(conn *websocket.Conn, s string, args ...interface{}) {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
+	kv := rpcutil.RequestKV(r)
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("error upgrading: %s", err)
+		kv["err"] = err
+		llog.Warn("could not upgrade to websocket", kv)
 		return
 	}
 	closeCh := make(chan struct{})
@@ -127,23 +135,29 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	cd, err := parseConnData(r)
 	if err != nil {
-		log.Printf("parseConnData: %s", err)
+		kv["err"] = err
+		llog.Warn("could not parse conn data", kv)
 		errorMessagef(conn, "parseConnData: %s", err)
 		return
 	}
 
-	defer log.Print(cd.sprintf("closed"))
+	kv["id"] = cd.id
+	kv["service"] = cd.service
+	kv["category"] = cd.category
+	kv["addr"] = net.JoinHostPort(cd.Host, strconv.Itoa(cd.Port))
+
+	defer llog.Warn("closed", kv)
 	defer etcdDelete(cd)
-	log.Print(cd.sprintf("connected"))
+	llog.Info("connected", kv)
 
 	tick := time.Tick(timeout / 2)
-	if !doTick(conn, cd) {
+	if !doTick(conn, cd, kv) {
 		return
 	}
 	for {
 		select {
 		case <-tick:
-			if !doTick(conn, cd) {
+			if !doTick(conn, cd, kv) {
 				return
 			}
 		case <-closeCh:
@@ -152,16 +166,18 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func doTick(conn *websocket.Conn, cd connData) bool {
+func doTick(conn *websocket.Conn, cd connData, kv llog.KV) bool {
 	deadline := time.Now().Add(timeout / 2)
 	err := conn.WriteControl(websocket.PingMessage, nil, deadline)
 	if err != nil {
-		log.Print(cd.sprintf("timedout"))
+		llog.Warn("timedout", kv)
 		return false
 	}
 
 	if err = etcdStore(cd); err != nil {
-		log.Print(cd.sprintf("storing etcd data: %s", err))
+		kv["err"] = err
+		llog.Error("storing etcd data", kv)
+		delete(kv, "err") // the kv gets used again later, so delete err
 		errorMessagef(conn, "storing etcd data: %s", err)
 		return false
 	}
