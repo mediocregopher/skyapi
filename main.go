@@ -5,28 +5,48 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"net"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/gorilla/websocket"
+	"github.com/levenlabs/go-llog"
+	"github.com/levenlabs/golib/rpcutil"
 	"github.com/mediocregopher/lever"
 )
 
 var (
 	listenAddr      string
 	etcdAPIs        []string
+	etcdPoolSize    int
 	dnsRoot         string
 	defaultCategory string
 	timeout         time.Duration
-	etcdClient      *etcd.Client
-	etcdClientLock  sync.Mutex
+	etcdPool        chan *etcd.Client
 )
+
+func getEtcdClient(kv llog.KV) *etcd.Client {
+	for {
+		select {
+		case c := <-etcdPool:
+			return c
+		case <-time.After(5 * time.Second):
+			llog.Warn("waited 5 seconds for available etcd conn", kv)
+		}
+	}
+}
+
+func putEtcdClient(c *etcd.Client) {
+	select {
+	case etcdPool <- c:
+	default:
+		llog.Error("etcd pool is full somehow")
+	}
+}
 
 func main() {
 	l := lever.New("skyapi", nil)
@@ -39,6 +59,11 @@ func main() {
 		Name:         "--etcd-api",
 		Description:  "scheme://address an etcd node in the cluster can be found on. Can be specified multiple times",
 		DefaultMulti: []string{"http://127.0.0.1:4001"},
+	})
+	l.Add(lever.Param{
+		Name:        "--etcd-pool-size",
+		Description: "The number of separate connections to etcd to keep open",
+		Default:     "16",
 	})
 	l.Add(lever.Param{
 		Name:        "--dns-root",
@@ -55,22 +80,34 @@ func main() {
 		Description: "The default category to file incoming connections over, if they don't specify",
 		Default:     "services",
 	})
+	l.Add(lever.Param{
+		Name:        "--log-level",
+		Description: "Adjust the log level. Valid options are: error, warn, info, debug",
+		Default:     "info",
+	})
 	l.Parse()
 
 	listenAddr, _ = l.ParamStr("--listen-addr")
 	etcdAPIs, _ = l.ParamStrs("--etcd-api")
+	etcdPoolSize, _ = l.ParamInt("--etcd-pool-size")
 	dnsRoot, _ = l.ParamStr("--dns-root")
 	timeoutSecs, _ := l.ParamInt("--timeout")
 	timeout = time.Duration(timeoutSecs) * time.Second
 	defaultCategory, _ = l.ParamStr("--default-category")
+	logLevel, _ := l.ParamStr("--log-level")
+	llog.SetLevelFromString(logLevel)
 
-	etcdClientLock.Lock()
-	etcdClient = etcd.NewClient(etcdAPIs)
-	etcdClientLock.Unlock()
+	etcdPool = make(chan *etcd.Client, etcdPoolSize)
+	for i := 0; i < etcdPoolSize; i++ {
+		etcdPool <- etcd.NewClient(etcdAPIs)
+	}
 
 	http.Handle("/provide", http.HandlerFunc(handler))
-	log.Printf("listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, nil))
+
+	kv := llog.KV{"addr": listenAddr}
+	llog.Info("listening for websocket connections", kv)
+	kv["err"] = http.ListenAndServe(listenAddr, nil)
+	llog.Fatal("failed listening for websocket connections", kv)
 }
 
 var upgrader = websocket.Upgrader{
@@ -91,13 +128,6 @@ type connData struct {
 	Weight            int    `json:"weight,omitempty"`
 }
 
-func (cd connData) sprintf(s string, args ...interface{}) string {
-	realArgs := make([]interface{}, 0, len(args)+5)
-	realArgs = append(realArgs, cd.id, cd.service, cd.category, cd.Host, cd.Port)
-	realArgs = append(realArgs, args...)
-	return fmt.Sprintf("[%s - %s.%s] %s:%d - "+s, realArgs...)
-}
-
 func (cd connData) toPath() (string, string) {
 	parts := strings.Split(dnsRoot, ".")
 	partsR := append(make([]string, 0, len(parts)+2), "/skydns")
@@ -116,9 +146,11 @@ func errorMessagef(conn *websocket.Conn, s string, args ...interface{}) {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
+	kv := rpcutil.RequestKV(r)
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("error upgrading: %s", err)
+		kv["err"] = err
+		llog.Warn("could not upgrade to websocket", kv)
 		return
 	}
 	closeCh := make(chan struct{})
@@ -127,23 +159,33 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	cd, err := parseConnData(r)
 	if err != nil {
-		log.Printf("parseConnData: %s", err)
+		kv["err"] = err
+		llog.Warn("could not parse conn data", kv)
 		errorMessagef(conn, "parseConnData: %s", err)
 		return
 	}
 
-	defer log.Print(cd.sprintf("closed"))
-	defer etcdDelete(cd)
-	log.Print(cd.sprintf("connected"))
+	kv["id"] = cd.id
+	kv["service"] = cd.service
+	kv["category"] = cd.category
+	kv["addr"] = net.JoinHostPort(cd.Host, strconv.Itoa(cd.Port))
+
+	defer llog.Warn("closed", kv)
+	defer func() {
+		etcdClient := getEtcdClient(kv)
+		defer putEtcdClient(etcdClient)
+		etcdDelete(etcdClient, cd)
+	}()
+	llog.Info("connected", kv)
 
 	tick := time.Tick(timeout / 2)
-	if !doTick(conn, cd) {
+	if !doTick(conn, cd, kv) {
 		return
 	}
 	for {
 		select {
 		case <-tick:
-			if !doTick(conn, cd) {
+			if !doTick(conn, cd, kv) {
 				return
 			}
 		case <-closeCh:
@@ -152,16 +194,21 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func doTick(conn *websocket.Conn, cd connData) bool {
+func doTick(conn *websocket.Conn, cd connData, kv llog.KV) bool {
 	deadline := time.Now().Add(timeout / 2)
 	err := conn.WriteControl(websocket.PingMessage, nil, deadline)
 	if err != nil {
-		log.Print(cd.sprintf("timedout"))
+		llog.Warn("timedout", kv)
 		return false
 	}
 
-	if err = etcdStore(cd); err != nil {
-		log.Print(cd.sprintf("storing etcd data: %s", err))
+	etcdClient := getEtcdClient(kv)
+	defer putEtcdClient(etcdClient)
+
+	if err = etcdStore(etcdClient, cd); err != nil {
+		kv["err"] = err
+		llog.Error("storing etcd data", kv)
+		delete(kv, "err") // the kv gets used again later, so delete err
 		errorMessagef(conn, "storing etcd data: %s", err)
 		return false
 	}
@@ -261,10 +308,7 @@ func MkDirP(ec *etcd.Client, dir string) error {
 	return nil
 }
 
-func etcdStore(cd connData) error {
-	etcdClientLock.Lock()
-	defer etcdClientLock.Unlock()
-
+func etcdStore(etcdClient *etcd.Client, cd connData) error {
 	dir, file := cd.toPath()
 	if err := MkDirP(etcdClient, dir); err != nil {
 		return err
@@ -283,12 +327,8 @@ func etcdStore(cd connData) error {
 	return nil
 }
 
-func etcdDelete(cd connData) error {
+func etcdDelete(etcdClient *etcd.Client, cd connData) error {
 	_, file := cd.toPath()
-
-	etcdClientLock.Lock()
 	_, err := etcdClient.Delete(file, false)
-	etcdClientLock.Unlock()
-
 	return err
 }
