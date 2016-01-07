@@ -285,34 +285,8 @@ func parseConnData(r *http.Request) (connData, error) {
 	}, nil
 }
 
-// Creates the given dir (and all of its parent directories if they don't
-// already exist). Will not return an error if the given directory already
-// exists
-func MkDirP(ec *etcd.Client, dir string) error {
-	parts := make([]string, 0, 4)
-	for {
-		parts = append(parts, dir)
-		dir = path.Dir(dir)
-		if dir == "/" {
-			break
-		}
-	}
-
-	for i := range parts {
-		ai := len(parts) - i - 1
-		_, err := ec.CreateDir(parts[ai], 0)
-		if err != nil && err.(*etcd.EtcdError).ErrorCode != 105 {
-			return err
-		}
-	}
-	return nil
-}
-
 func etcdStore(etcdClient *etcd.Client, cd connData) error {
-	dir, file := cd.toPath()
-	if err := MkDirP(etcdClient, dir); err != nil {
-		return err
-	}
+	_, file := cd.toPath()
 
 	j, err := json.Marshal(cd)
 	if err != nil {
