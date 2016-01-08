@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"path"
@@ -49,6 +50,8 @@ func putEtcdClient(c *etcd.Client) {
 }
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	l := lever.New("skyapi", nil)
 	l.Add(lever.Param{
 		Name:        "--listen-addr",
@@ -178,10 +181,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}()
 	llog.Info("connected", kv)
 
-	tick := time.Tick(timeout / 2)
 	if !doTick(conn, cd, kv) {
 		return
 	}
+
+	// sleep a random amount within the timeout before starting the loop. this
+	// is to prevent a repeated stampede, if skyapi restarts and all of the
+	// services reconnect, without this all of their ticks would be going off at
+	// the same time
+	time.Sleep(time.Duration(rand.Int63n(int64(timeout) * 3 / 4)))
+
+	tick := time.Tick(timeout / 2)
 	for {
 		select {
 		case <-tick:
