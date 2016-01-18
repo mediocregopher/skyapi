@@ -234,6 +234,11 @@ func readDiscard(conn *websocket.Conn, closeCh chan struct{}) {
 	}
 }
 
+var (
+	zeroIP4 = net.ParseIP("0.0.0.0")
+	zeroIP6 = net.ParseIP("::")
+)
+
 func parseConnData(r *http.Request) (connData, error) {
 	service := r.FormValue("service")
 	category := r.FormValue("category")
@@ -251,8 +256,17 @@ func parseConnData(r *http.Request) (connData, error) {
 		category = defaultCategory
 	}
 
+	if host != "" {
+		if hostIP := net.ParseIP(host); hostIP != nil {
+			if hostIP.Equal(zeroIP4) || hostIP.Equal(zeroIP6) {
+				host = ""
+			}
+		}
+	}
 	if host == "" {
-		host = r.RemoteAddr[:strings.Index(r.RemoteAddr, ":")]
+		if host, _, err = net.SplitHostPort(r.RemoteAddr); err != nil {
+			return connData{}, err
+		}
 	}
 
 	if portStr != "" {
