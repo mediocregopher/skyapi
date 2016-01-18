@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -83,11 +82,9 @@ func ProvideOpts(o Opts) error {
 }
 
 func provide(o Opts) error {
-	parts := strings.Split(o.ThisAddr, ":")
-	if len(parts) == 1 {
-		parts = append(parts, "")
-	} else if len(parts) != 2 {
-		return fmt.Errorf("invalid addr %q", o.ThisAddr)
+	host, port, err := net.SplitHostPort(o.ThisAddr)
+	if err != nil {
+		return err
 	}
 
 	u, err := url.Parse("ws://" + o.SkyAPIAddr + "/provide")
@@ -96,11 +93,11 @@ func provide(o Opts) error {
 	}
 	vals := url.Values{}
 	vals.Set("service", o.Service)
-	if parts[0] != "" {
-		vals.Set("host", parts[0])
+	if host != "" {
+		vals.Set("host", host)
 	}
-	if parts[1] != "" {
-		vals.Set("port", parts[1])
+	if port != "" {
+		vals.Set("port", port)
 	}
 	if o.Category != "" {
 		vals.Set("category", o.Category)
