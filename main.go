@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coreos/go-etcd/etcd"
+	"golang.org/x/net/context"
+
+	"github.com/coreos/etcd/client"
 	"github.com/gorilla/websocket"
 	"github.com/levenlabs/go-llog"
 	"github.com/levenlabs/golib/rpcutil"
@@ -23,31 +25,12 @@ import (
 var (
 	listenAddr      string
 	etcdAPIs        []string
-	etcdPoolSize    int
 	dnsRoot         string
 	defaultCategory string
 	timeout         time.Duration
-	etcdPool        chan *etcd.Client
+	etcdKeysAPI     client.KeysAPI
+	etcdCtx         = context.Background()
 )
-
-func getEtcdClient(kv llog.KV) *etcd.Client {
-	for {
-		select {
-		case c := <-etcdPool:
-			return c
-		case <-time.After(5 * time.Second):
-			llog.Warn("waited 5 seconds for available etcd conn", kv)
-		}
-	}
-}
-
-func putEtcdClient(c *etcd.Client) {
-	select {
-	case etcdPool <- c:
-	default:
-		llog.Error("etcd pool is full somehow")
-	}
-}
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
@@ -65,8 +48,7 @@ func main() {
 	})
 	l.Add(lever.Param{
 		Name:        "--etcd-pool-size",
-		Description: "The number of separate connections to etcd to keep open",
-		Default:     "16",
+		Description: "deprecated option, now ignored",
 	})
 	l.Add(lever.Param{
 		Name:        "--dns-root",
@@ -92,7 +74,6 @@ func main() {
 
 	listenAddr, _ = l.ParamStr("--listen-addr")
 	etcdAPIs, _ = l.ParamStrs("--etcd-api")
-	etcdPoolSize, _ = l.ParamInt("--etcd-pool-size")
 	dnsRoot, _ = l.ParamStr("--dns-root")
 	timeoutSecs, _ := l.ParamInt("--timeout")
 	timeout = time.Duration(timeoutSecs) * time.Second
@@ -100,14 +81,32 @@ func main() {
 	logLevel, _ := l.ParamStr("--log-level")
 	llog.SetLevelFromString(logLevel)
 
-	etcdPool = make(chan *etcd.Client, etcdPoolSize)
-	for i := 0; i < etcdPoolSize; i++ {
-		etcdPool <- etcd.NewClient(etcdAPIs)
+	kv := llog.KV{"addrs": etcdAPIs}
+	llog.Info("creating etcd client", kv)
+	etcdClient, err := client.New(client.Config{
+		Endpoints: etcdAPIs,
+	})
+	if err != nil {
+		kv["err"] = err
+		llog.Fatal("error creating etcd client", kv)
 	}
+	// TODO the etcd client docs are pretty bad and don't adequetly enumerate
+	// when this is needed and when it isn't, so we may need this afterall
+	//go func() {
+	//	for {
+	//		if err := etcdClient.AutoSync(etcdCtx, 10*time.Second); err != nil {
+	//			llog.Error("failed syncing etcd cluster", llog.KV{
+	//				"err":     err,
+	//				"members": etcdClient.Endpoints(),
+	//			})
+	//		}
+	//	}
+	//}()
+	etcdKeysAPI = client.NewKeysAPI(etcdClient)
 
 	http.Handle("/provide", http.HandlerFunc(handler))
 
-	kv := llog.KV{"addr": listenAddr}
+	kv = llog.KV{"addr": listenAddr}
 	llog.Info("listening for websocket connections", kv)
 	kv["err"] = http.ListenAndServe(listenAddr, nil)
 	llog.Fatal("failed listening for websocket connections", kv)
@@ -175,9 +174,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	defer llog.Warn("closed", kv)
 	defer func() {
-		etcdClient := getEtcdClient(kv)
-		defer putEtcdClient(etcdClient)
-		etcdDelete(etcdClient, cd)
+		etcdDelete(cd)
 	}()
 	llog.Info("connected", kv)
 
@@ -212,10 +209,7 @@ func doTick(conn *websocket.Conn, cd connData, kv llog.KV) bool {
 		return false
 	}
 
-	etcdClient := getEtcdClient(kv)
-	defer putEtcdClient(etcdClient)
-
-	if err = etcdStore(etcdClient, cd); err != nil {
+	if err = etcdStore(cd); err != nil {
 		kv["err"] = err
 		llog.Error("storing etcd data", kv)
 		delete(kv, "err") // the kv gets used again later, so delete err
@@ -309,7 +303,7 @@ func parseConnData(r *http.Request) (connData, error) {
 	}, nil
 }
 
-func etcdStore(etcdClient *etcd.Client, cd connData) error {
+func etcdStore(cd connData) error {
 	_, file := cd.toPath()
 
 	j, err := json.Marshal(cd)
@@ -317,7 +311,9 @@ func etcdStore(etcdClient *etcd.Client, cd connData) error {
 		return err
 	}
 
-	_, err = etcdClient.Set(file, string(j), uint64(timeout.Seconds()))
+	_, err = etcdKeysAPI.Set(etcdCtx, file, string(j), &client.SetOptions{
+		TTL: timeout,
+	})
 	if err != nil {
 		return err
 	}
@@ -325,8 +321,8 @@ func etcdStore(etcdClient *etcd.Client, cd connData) error {
 	return nil
 }
 
-func etcdDelete(etcdClient *etcd.Client, cd connData) error {
+func etcdDelete(cd connData) error {
 	_, file := cd.toPath()
-	_, err := etcdClient.Delete(file, false)
+	_, err := etcdKeysAPI.Delete(etcdCtx, file, nil)
 	return err
 }
