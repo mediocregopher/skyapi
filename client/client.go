@@ -45,6 +45,20 @@ type Opts struct {
 	// Optional. The interval to ping the server at in order to ensure the
 	// connection is still alive. Defaults to 10 seconds.
 	Interval time.Duration
+
+	// Optional. If set, can be later closed by another process to indicate that
+	// the client should stop advertising and close. A nil error will be
+	// returned by the ProvideOpts method in this case.
+	StopCh chan struct{}
+}
+
+func (o Opts) stopped() bool {
+	select {
+	case _, stopped := <-o.StopCh:
+		return stopped
+	default:
+		return false
+	}
 }
 
 // Provide is a DEPRECATED method for making a connection to a skyapi instance.
@@ -110,8 +124,10 @@ func provide(o Opts) error {
 	for {
 		tries++
 
-		didSucceed, err := innerProvide(o.SkyAPIAddr, u, o.Interval)
-		if didSucceed {
+		didSucceed, err := innerProvide(o.SkyAPIAddr, u, o.Interval, o.StopCh)
+		if o.stopped() {
+			return nil
+		} else if didSucceed {
 			tries = 0
 		}
 		if o.ReconnectAttempts >= 0 && tries >= o.ReconnectAttempts {
@@ -121,10 +137,7 @@ func provide(o Opts) error {
 	}
 }
 
-func innerProvide(
-	addr string, u *url.URL,
-	interval time.Duration,
-) (
+func innerProvide(addr string, u *url.URL, interval time.Duration, stopCh chan struct{}) (
 	bool, error,
 ) {
 	var didSucceed bool
@@ -158,6 +171,10 @@ func innerProvide(
 
 		case <-closeCh:
 			return didSucceed, fmt.Errorf("connection to %s closed", addr)
+
+		case <-stopCh:
+			conn.Close()
+			return didSucceed, nil
 		}
 	}
 }
