@@ -172,7 +172,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	kv["category"] = cd.category
 	kv["addr"] = net.JoinHostPort(cd.Host, strconv.Itoa(cd.Port))
 
-	defer llog.Warn("closed", kv)
+	defer llog.Info("closed", kv)
 	defer func() {
 		etcdDelete(cd)
 	}()
