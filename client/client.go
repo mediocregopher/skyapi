@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/levenlabs/go-srvclient"
 )
 
 // Opts represent a set of options which can be passed into ProvideOpts. Some
@@ -16,7 +17,7 @@ import (
 type Opts struct {
 
 	// Required. The address of the skyapi instance to connect to. Should be
-	// "host:port"
+	// "host:port" or a hostname that can be resolved via SRV lookup
 	SkyAPIAddr string
 
 	// Required. The name of the service this process is providing for
@@ -142,12 +143,15 @@ func innerProvide(addr string, u *url.URL, interval time.Duration, stopCh chan s
 ) {
 	var didSucceed bool
 
+	addr = srvclient.MaybeSRV(addr)
+
 	rawConn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return didSucceed, err
 	}
 	defer rawConn.Close()
 
+	u.Host = addr
 	conn, _, err := websocket.NewClient(rawConn, u, nil, 0, 0)
 	if err != nil {
 		return didSucceed, err
