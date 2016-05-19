@@ -122,7 +122,7 @@ var upgrader = websocket.Upgrader{
 }
 
 type connData struct {
-	id                string
+	prefix, id        string
 	service, category string
 	Host              string `json:"host"`
 	Port              int    `json:"port,omitempty"`
@@ -138,7 +138,11 @@ func (cd connData) toPath() (string, string) {
 	}
 	partsR = append(partsR, cd.category, cd.service)
 	dir := path.Join(partsR...)
-	file := path.Join(dir, cd.id)
+	key := cd.id
+	if cd.prefix == "" {
+		key = cd.prefix + "-" + cd.id
+	}
+	file := path.Join(dir, key)
 	return dir, file
 }
 
@@ -238,6 +242,7 @@ func parseConnData(r *http.Request) (connData, error) {
 	category := r.FormValue("category")
 	host := r.FormValue("host")
 	portStr := r.FormValue("port")
+	prefix := r.FormValue("prefix")
 	var port int
 	var err error
 
@@ -293,6 +298,7 @@ func parseConnData(r *http.Request) (connData, error) {
 	id := hex.EncodeToString(sha.Sum(nil))
 
 	return connData{
+		prefix:   prefix,
 		id:       id,
 		service:  service,
 		category: category,

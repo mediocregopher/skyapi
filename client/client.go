@@ -27,6 +27,10 @@ type Opts struct {
 	// "host:port" or ":port"
 	ThisAddr string
 
+	// Optional. A prefix that will be prepended to the hashed id that is created
+	// for the domain. Useful for passing grouping information such as datacenter.
+	Prefix string
+
 	// Optional. The category this service falls under. Defaults to the skyapi
 	// server's global default, usually "services"
 	Category string
@@ -116,6 +120,9 @@ func provide(o Opts) error {
 	}
 	if o.Category != "" {
 		vals.Set("category", o.Category)
+	}
+	if o.Prefix != "" {
+		vals.Set("prefix", o.Prefix)
 	}
 	vals.Set("priority", strconv.Itoa(o.Priority))
 	vals.Set("weight", strconv.Itoa(o.Weight))
