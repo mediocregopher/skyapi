@@ -139,7 +139,7 @@ func (cd connData) toPath() (string, string) {
 	partsR = append(partsR, cd.category, cd.service)
 	dir := path.Join(partsR...)
 	key := cd.id
-	if cd.prefix == "" {
+	if cd.prefix != "" {
 		key = cd.prefix + "-" + cd.id
 	}
 	file := path.Join(dir, key)
