@@ -296,6 +296,9 @@ func parseConnData(r *http.Request) (connData, error) {
 	fmt.Fprint(sha, host)
 	fmt.Fprint(sha, port)
 	id := hex.EncodeToString(sha.Sum(nil))
+	if prefix != "" {
+		id = id[:20]
+	}
 
 	return connData{
 		prefix:   prefix,
