@@ -215,7 +215,7 @@ func doTick(conn *websocket.Conn, cd connData, kv llog.KV) bool {
 
 	if err = etcdStore(cd); err != nil {
 		kv["err"] = err
-		llog.Error("storing etcd data", kv)
+		llog.Warn("storing etcd data", kv)
 		delete(kv, "err") // the kv gets used again later, so delete err
 		errorMessagef(conn, "storing etcd data: %s", err)
 		return false
