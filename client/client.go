@@ -11,6 +11,14 @@ import (
 	"github.com/levenlabs/go-srvclient"
 )
 
+// Resolver is used to resolve arbitrary names of services to a single address,
+// possibly selected out of many addresses. An address consists of "host:port".
+type Resolver interface {
+	// Takes in some arbitrary name or hostname and returns an address for it.
+	// Must be able to handle the given string already being an address.
+	Resolve(string) (string, error)
+}
+
 // Opts represent a set of options which can be passed into ProvideOpts. Some
 // are required to be filled in and are marked as such. The rest have defaults
 // listed in their descriptions
@@ -55,6 +63,8 @@ type Opts struct {
 	// the client should stop advertising and close. A nil error will be
 	// returned by the ProvideOpts method in this case.
 	StopCh chan struct{}
+
+	Resolver Resolver
 }
 
 func (o Opts) stopped() bool {
@@ -64,6 +74,13 @@ func (o Opts) stopped() bool {
 	default:
 		return false
 	}
+}
+
+// defaultResolver implements the resolver interface
+type defaultResolver struct{}
+
+func (*defaultResolver) Resolve(h string) (string, error) {
+	return srvclient.MaybeSRV(h), nil
 }
 
 // Provide is a DEPRECATED method for making a connection to a skyapi instance.
@@ -81,7 +98,7 @@ func Provide(
 		ReconnectAttempts: reconnectAttempts,
 		Interval:          interval,
 	}
-	return provide(o)
+	return ProvideOpts(o)
 }
 
 // ProvideOpts uses the given Opts value to connect to a skyapi instance and
@@ -96,6 +113,9 @@ func ProvideOpts(o Opts) error {
 	}
 	if o.Interval == 0 {
 		o.Interval = 10 * time.Second
+	}
+	if o.Resolver == nil {
+		o.Resolver = &defaultResolver{}
 	}
 	return provide(o)
 }
@@ -132,7 +152,7 @@ func provide(o Opts) error {
 	for {
 		tries++
 
-		didSucceed, err := innerProvide(o.SkyAPIAddr, u, o.Interval, o.StopCh)
+		didSucceed, err := innerProvide(o.SkyAPIAddr, o.Resolver, u, o.Interval, o.StopCh)
 		if o.stopped() {
 			return nil
 		} else if didSucceed {
@@ -145,12 +165,15 @@ func provide(o Opts) error {
 	}
 }
 
-func innerProvide(addr string, u *url.URL, interval time.Duration, stopCh chan struct{}) (
+func innerProvide(addr string, res Resolver, u *url.URL, interval time.Duration, stopCh chan struct{}) (
 	bool, error,
 ) {
 	var didSucceed bool
 
-	addr = srvclient.MaybeSRV(addr)
+	addr, err := res.Resolve(addr)
+	if err != nil {
+		return didSucceed, err
+	}
 
 	rawConn, err := net.Dial("tcp", addr)
 	if err != nil {
