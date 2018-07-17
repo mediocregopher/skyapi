@@ -122,21 +122,25 @@ var upgrader = websocket.Upgrader{
 }
 
 type connData struct {
-	prefix, id        string
-	service, category string
-	Host              string `json:"host"`
-	Port              int    `json:"port,omitempty"`
-	Priority          int    `json:"priority,omitempty"`
-	Weight            int    `json:"weight,omitempty"`
+	prefix, id string
+	service    string
+	categories []string
+	Host       string `json:"host"`
+	Port       int    `json:"port,omitempty"`
+	Priority   int    `json:"priority,omitempty"`
+	Weight     int    `json:"weight,omitempty"`
 }
 
 func (cd connData) toPath() (string, string) {
 	parts := strings.Split(dnsRoot, ".")
-	partsR := append(make([]string, 0, len(parts)+2), "/skydns")
+	partsR := append(make([]string, 0, len(parts)+len(cd.categories)+2), "/skydns")
 	for i := len(parts) - 1; i >= 0; i-- {
 		partsR = append(partsR, parts[i])
 	}
-	partsR = append(partsR, cd.category, cd.service)
+	for i := len(cd.categories) - 1; i >= 0; i-- {
+		partsR = append(partsR, cd.categories[i])
+	}
+	partsR = append(partsR, cd.service)
 	dir := path.Join(partsR...)
 	key := cd.id
 	if cd.prefix != "" {
@@ -173,7 +177,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	kv["id"] = cd.id
 	kv["service"] = cd.service
-	kv["category"] = cd.category
+	kv["category"] = fmt.Sprint(cd.categories)
 	kv["addr"] = net.JoinHostPort(cd.Host, strconv.Itoa(cd.Port))
 
 	defer llog.Info("closed", kv)
@@ -251,8 +255,11 @@ func parseConnData(r *http.Request) (connData, error) {
 		return connData{}, err
 	}
 
+	var categories []string
 	if category == "" {
-		category = defaultCategory
+		categories = []string{defaultCategory}
+	} else {
+		categories = strings.Split(category, ",")
 	}
 
 	if host != "" {
@@ -292,7 +299,13 @@ func parseConnData(r *http.Request) (connData, error) {
 
 	sha := sha1.New()
 	fmt.Fprint(sha, service)
-	fmt.Fprint(sha, category)
+	// don't break anything that's depending on the old format of category
+	if len(categories) == 1 {
+		fmt.Fprint(sha, categories[0])
+	} else {
+		// without the %#v then []string{"foo","bar"} == []string{"foo bar"}
+		fmt.Fprintf(sha, "%#v", categories)
+	}
 	fmt.Fprint(sha, host)
 	fmt.Fprint(sha, port)
 	id := hex.EncodeToString(sha.Sum(nil))
@@ -301,14 +314,14 @@ func parseConnData(r *http.Request) (connData, error) {
 	}
 
 	return connData{
-		prefix:   prefix,
-		id:       id,
-		service:  service,
-		category: category,
-		Host:     host,
-		Port:     port,
-		Priority: priority,
-		Weight:   weight,
+		prefix:     prefix,
+		id:         id,
+		service:    service,
+		categories: categories,
+		Host:       host,
+		Port:       port,
+		Priority:   priority,
+		Weight:     weight,
 	}, nil
 }
 

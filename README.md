@@ -18,7 +18,9 @@ it. For the rest of the examples we're going to say the root domain is
 
 skyapi categorizes entries under a sub-domain. By default this sub-domain is
 `services` but this can be configured both globally and on a per-connection
-basis.
+basis. Multiple categories can be sent to allow the sub-domain to be
+multi-level. For instance, `category=services,production`, would make the
+entry be under `{service}.services.production.turtles.com`.
 
 For example, if a process creates a connection saying it provides the `foo`
 service then it will be added to the pool under `foo.services.turtles.com`.
@@ -36,7 +38,8 @@ skyapi listens by default on port 8053. It exposes a single websocket endpoint,
 
 * **service** (Required) - The name of the service being provided
 * **category** - The category (sub-domain) for the service to be filed under.
-  Defaults to `services`
+  Defaults to `services`. Can be a comma-delimited list if you want a
+  multi-level sub-domain in left-to-right order.
 * **host** - The host/ip the process can be reached on. Defaults to the ip the
   request is coming from
 * **port** (Required) - The port the process can be reached on
